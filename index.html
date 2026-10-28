@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Civil 3D Point Elevation Fixer</title>
+
+  <!-- proj4js converts NAD83 State Plane coordinates to lat/lon so USGS can be queried -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      max-width: 700px;
+      margin: 40px auto;
+      padding: 0 20px;
+      line-height: 1.5;
+      background-color: #f9f9f9;
+      color: #333;
+    }
+    .card {
+      background: #ffffff;
+      border: 1px solid #e1e4e8;
+      border-radius: 8px;
+      padding: 24px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group > label,
+    .step-label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .hint {
+      font-size: 13px;
+      color: #666;
+      margin-top: 4px;
+    }
+    select, button {
+      font-size: 14px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+    select {
+      width: 100%;
+      max-width: 400px;
+    }
+    button {
+      background-color: #0066cc;
+      color: white;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 10px;
+      padding: 10px 18px;
+      border-radius: 4px;
+    }
+    button:disabled {
+      background-color: #aaa;
+      cursor: not-allowed;
+    }
+    button.secondary {
+      background-color: #fff;
+      color: #b42318;
+      border: 1px solid #f0b4ae;
+      margin-top: 12px;
+      padding: 6px 14px;
+    }
+
+    /* ---------- Drag & drop zone ---------- */
+    #pointFile {
+      display: none;
+    }
+    .drop-zone {
+      display: block;
+      border: 2px dashed #9bb7d4;
+      border-radius: 8px;
+      padding: 28px 16px;
+      text-align: center;
+      background: #f4f8fc;
+      cursor: pointer;
+      transition: background-color 0.15s, border-color 0.15s;
+    }
+    .drop-zone * {
+      pointer-events: none; /* keeps dragleave from flickering over child elements */
+    }
+    .drop-zone:hover,
+    .drop-zone:focus {
+      background: #eaf2fb;
+      border-color: #0066cc;
+      outline: none;
+    }
+    .drop-zone.dragover {
+      background: #dcebfa;
+      border-color: #0066cc;
+      border-style: solid;
+    }
+    .drop-zone.has-file {
+      border-color: #2e7d32;
+      background: #f1f8f2;
+    }
+    .drop-zone .icon {
+      font-size: 32px;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+    .drop-zone .main-text {
+      font-weight: 600;
+    }
+    .drop-zone .sub-text {
+      font-size: 13px;
+      color: #666;
+    }
+    .drop-zone .browse {
+      color: #0066cc;
+      text-decoration: underline;
+    }
+    #fileName {
+      margin-top: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #2e7d32;
+      word-break: break-all;
+    }
+
+    /* ---------- Working indicator ---------- */
+    #working {
+      display: none;
+      margin-top: 20px;
+      padding: 16px;
+      border: 1px solid #cfe0f2;
+      border-radius: 8px;
+      background: #f4f8fc;
+    }
+    #working.active {
+      display: block;
+    }
+    .working-row {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .spinner {
+      flex: 0 0 auto;
+      width: 36px;
+      height: 36px;
+      border: 4px solid #cfe0f2;
+      border-top-color: #0066cc;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    #workingText {
+      font-weight: 600;
+      color: #234;
+    }
+    #workingDetail {
+      font-size: 13px;
+      color: #555;
+    }
+    .progress {
+      margin-top: 12px;
+      height: 10px;
+      background: #dde7f1;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #0066cc, #3d8fe0);
+      transition: width 0.25s ease;
+    }
+
+    #status {
+      margin-top: 16px;
+      font-weight: 500;
+      color: #555;
+      white-space: pre-wrap;
+    }
+    #status.success { color: #2e7d32; }
+    #status.warning { color: #a15c00; }
+    #status.error   { color: #b42318; }
+    #status a { color: #0066cc; }
+
+    /* ---------- Result preview ---------- */
+    #preview {
+      display: none;
+      margin-top: 16px;
+    }
+    #preview h3 {
+      font-size: 15px;
+      margin: 0 0 6px;
+    }
+    .table-wrap {
+      max-height: 260px;
+      overflow: auto;
+      border: 1px solid #e1e4e8;
+      border-radius: 6px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+    th, td {
+      padding: 4px 10px;
+      text-align: right;
+      border-bottom: 1px solid #eef0f2;
+      white-space: nowrap;
+    }
+    th {
+      position: sticky;
+      top: 0;
+      background: #f4f6f8;
+      font-weight: 600;
+    }
+    td.old { color: #999; }
+    td.new { font-weight: 600; color: #234; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>Civil 3D Points + USGS Elevation Fixer</h2>
+    <p>Upload a point file exported from Civil 3D (PENZ or PNEZ, comma delimited) that is already in NAD83 State Plane. The coordinates are kept exactly as they are. Only the elevation is replaced with the USGS 3DEP ground elevation.</p>
+
+    <!-- Step 1: File Upload (drag & drop or click to browse) -->
+    <div class="form-group">
+      <span class="step-label">1. Select Civil 3D Point File (.txt / .csv):</span>
+      <label for="pointFile" id="dropZone" class="drop-zone" tabindex="0">
+        <div class="icon">📂</div>
+        <div class="main-text">Drag &amp; drop your point file here</div>
+        <div class="sub-text">or <span class="browse">click to browse</span></div>
+      </label>
+      <input type="file" id="pointFile" accept=".txt,.csv,.pnt,.xyz">
+      <div id="fileName"></div>
+    </div>
+
+    <!-- Step 2: Zone the points are in -->
+    <div class="form-group">
+      <label for="sourceProjection">2. Coordinate System of the Points (from your Civil 3D drawing):</label>
+      <select id="sourceProjection">
+        <option value="EPSG:3418">NAD83 / Iowa North (ftUS)</option>
+        <option value="EPSG:3417">NAD83 / Iowa South (ftUS)</option>
+        <option value="EPSG:3435">NAD83 / Illinois East (ftUS)</option>
+        <option value="EPSG:2227">NAD83 / California Zone 3 (ftUS)</option>
+        <option value="EPSG:2263">NAD83 / New York Long Island (ftUS)</option>
+        <option value="EPSG:2277">NAD83 / Texas Central (ftUS)</option>
+      </select>
+    </div>
+
+    <!-- Step 3: Column order of the input file -->
+    <div class="form-group">
+      <label for="inputFormat">3. Column Order of the File:</label>
+      <select id="inputFormat">
+        <option value="AUTO">Auto-detect (recommended)</option>
+        <option value="PENZ">PENZ (Point, Easting, Northing, Elevation)</option>
+        <option value="PNEZ">PNEZ (Point, Northing, Easting, Elevation)</option>
+      </select>
+      <div class="hint">Auto-detect checks which order puts the points inside the zone you picked.</div>
+    </div>
+
+    <!-- Step 4: Column order of the output -->
+    <div class="form-group">
+      <label for="outputFormat">4. Output Column Order:</label>
+      <select id="outputFormat">
+        <option value="SAME">Same as the input file</option>
+        <option value="PENZ">PENZ (Point, Easting, Northing, Elevation)</option>
+        <option value="PNEZ">PNEZ (Point, Northing, Easting, Elevation)</option>
+      </select>
+    </div>
+
+    <button id="processBtn" onclick="processFile()">Get Elevations & Download Text File</button>
+
+    <!-- Working indicator -->
+    <div id="working" aria-live="polite">
+      <div class="working-row">
+        <div class="spinner" aria-hidden="true"></div>
+        <div>
+          <div id="workingText">Working...</div>
+          <div id="workingDetail">Please keep this page open.</div>
+        </div>
+      </div>
+      <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+      <button class="secondary" id="cancelBtn" onclick="requestCancel()">Cancel</button>
+    </div>
+
+    <div id="status"></div>
+
+    <div id="preview">
+      <h3>Results</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Point</th><th>Northing</th><th>Easting</th><th>Old Elev</th><th>New Elev (ft)</th></tr></thead>
+          <tbody id="previewBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* =========================================================
+       Projection definitions (NAD83 State Plane, US Survey Feet)
+       Note: in proj4, x_0 / y_0 (false easting/northing) are ALWAYS in meters,
+       even when +units=us-ft.
+       ========================================================= */
+    proj4.defs("EPSG:4326", "+proj=longlat +datum=WGS84 +no_defs");
+    proj4.defs("EPSG:4269", "+proj=longlat +datum=NAD83 +no_defs");
+
+    proj4.defs("EPSG:3418", "+proj=lcc +lat_1=43.26666666666667 +lat_2=42.06666666666667 +lat_0=41.5 +lon_0=-93.5 +x_0=1500000 +y_0=1000000 +datum=NAD83 +units=us-ft +no_defs");
+    proj4.defs("EPSG:3417", "+proj=lcc +lat_1=41.78333333333333 +lat_2=40.61666666666667 +lat_0=40 +lon_0=-93.5 +x_0=500000 +y_0=0 +datum=NAD83 +units=us-ft +no_defs");
+    proj4.defs("EPSG:3435", "+proj=tmerc +lat_0=36.66666666666666 +lon_0=-88.33333333333333 +k=0.999975 +x_0=300000 +y_0=0 +datum=NAD83 +units=us-ft +no_defs");
+    proj4.defs("EPSG:2227", "+proj=lcc +lat_1=38.43333333333333 +lat_2=37.06666666666667 +lat_0=36.5 +lon_0=-120.5 +x_0=2000000 +y_0=500000 +datum=NAD83 +units=us-ft +no_defs");
+    proj4.defs("EPSG:2263", "+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000 +y_0=0 +datum=NAD83 +units=us-ft +no_defs");
+    proj4.defs("EPSG:2277", "+proj=lcc +lat_1=31.88333333333333 +lat_2=30.11666666666667 +lat_0=29.66666666666667 +lon_0=-100.3333333333333 +x_0=700000 +y_0=3000000 +datum=NAD83 +units=us-ft +no_defs");
+
+    // Rough lat/lon box of each zone, used to auto-detect column order and catch a wrong zone
+    const ZONE_BOUNDS = {
+      "EPSG:3418": { name: "Iowa North",          latMin: 41.7, latMax: 43.7, lonMin: -96.8, lonMax: -90.0 },
+      "EPSG:3417": { name: "Iowa South",          latMin: 40.2, latMax: 42.3, lonMin: -96.2, lonMax: -90.0 },
+      "EPSG:3435": { name: "Illinois East",       latMin: 36.8, latMax: 42.7, lonMin: -89.5, lonMax: -87.3 },
+      "EPSG:2227": { name: "California Zone 3",   latMin: 36.3, latMax: 38.9, lonMin: -123.3, lonMax: -119.3 },
+      "EPSG:2263": { name: "New York Long Island",latMin: 40.4, latMax: 41.4, lonMin: -74.4, lonMax: -71.7 },
+      "EPSG:2277": { name: "Texas Central",       latMin: 29.3, latMax: 32.7, lonMin: -106.8, lonMax: -93.4 }
+    };
+
+    /* =========================================================
+       File selection: drag & drop + click to browse
+       ========================================================= */
+    let selectedFile = null;
+    let cancelRequested = false;
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('pointFile');
+
+    function setFile(file) {
+      if (!file) return;
+      const name = file.name.toLowerCase();
+      if (name.endsWith('.kml') || name.endsWith('.kmz')) {
+        alert("That's a Google Earth file. Use the KML to NAD83 converter for .kml / .kmz files. This page is for Civil 3D point files (.txt / .csv).");
+        return;
+      }
+      selectedFile = file;
+      document.getElementById('fileName').textContent = `✔ Selected: ${file.name}`;
+      dropZone.classList.add('has-file');
+      setStatus("", "");
+      document.getElementById('preview').style.display = 'none';
+    }
+
+    fileInput.addEventListener('change', () => setFile(fileInput.files[0]));
+
+    ['dragenter', 'dragover'].forEach(evt =>
+      dropZone.addEventListener(evt, e => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+      })
+    );
+    ['dragleave', 'drop'].forEach(evt =>
+      dropZone.addEventListener(evt, e => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+      })
+    );
+    dropZone.addEventListener('drop', e => {
+      if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+    });
+
+    // Keyboard support: Enter or Space opens the file browser
+    dropZone.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        fileInput.click();
+      }
+    });
+
+    // Stop the browser from opening the file if it's dropped outside the zone
+    window.addEventListener('dragover', e => e.preventDefault());
+    window.addEventListener('drop', e => e.preventDefault());
+
+    /* =========================================================
+       UI helpers
+       ========================================================= */
+    function setStatus(text, kind, html) {
+      const status = document.getElementById('status');
+      if (html) status.innerHTML = html; else status.innerText = text;
+      status.className = kind || "";
+    }
+
+    function showWorking(on) {
+      document.getElementById('working').classList.toggle('active', on);
+      if (!on) setProgress(0);
+    }
+
+    function setWorking(text, detail) {
+      document.getElementById('workingText').innerText = text;
+      if (detail !== undefined) document.getElementById('workingDetail').innerText = detail;
+    }
+
+    function setProgress(fraction) {
+      document.getElementById('progressBar').style.width = `${Math.round(fraction * 100)}%`;
+    }
+
+    function requestCancel() {
+      cancelRequested = true;
+      setWorking("Cancelling...", "Finishing current requests.");
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // Lets the browser repaint (so the spinner/progress updates show)
+    const nextFrame = () => new Promise(r => setTimeout(r, 0));
+
+    // Wait that can be interrupted by Cancel
+    async function cancellableWait(ms, onTick) {
+      const end = Date.now() + ms;
+      while (Date.now() < end) {
+        if (cancelRequested) return;
+        if (onTick) onTick(Math.ceil((end - Date.now()) / 1000));
+        await new Promise(r => setTimeout(r, 250));
+      }
+    }
+
+    /* =========================================================
+       Parse the Civil 3D point file
+       Accepts comma, tab or space delimited lines:
+         P, A, B, Z[, Description]
+       Header lines or lines that aren't numbers are skipped.
+       ========================================================= */
+    function parsePointFile(text) {
+      const points = [];
+      let skipped = 0;
+      const lines = text.split(/\r?\n/);
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
+        const parts = line.includes(',')
+          ? line.split(',').map(s => s.trim())
+          : line.split(/\s+/);
+
+        if (parts.length < 3) { skipped++; continue; }
+
+        const a = parseFloat(parts[1]);
+        const b = parseFloat(parts[2]);
+        if (parts[0] === "" || isNaN(a) || isNaN(b)) { skipped++; continue; }
+
+        points.push({
+          num: parts[0],
+          aText: parts[1],               // column 2, kept exactly as written
+          bText: parts[2],               // column 3, kept exactly as written
+          a, b,
+          oldZ: parts.length > 3 ? parts[3] : "",
+          desc: parts.slice(4).filter(s => s !== "").join(" ")
+        });
+      }
+      return { points, skipped };
+    }
+
+    function inBounds(ll, bounds) {
+      return ll.lat >= bounds.latMin && ll.lat <= bounds.latMax &&
+             ll.lon >= bounds.lonMin && ll.lon <= bounds.lonMax;
+    }
+
+    function toLatLon(epsg, easting, northing) {
+      const [lon, lat] = proj4(epsg, "EPSG:4326", [easting, northing]);
+      return { lat, lon };
+    }
+
+    // Converts all points under one column order; returns how many land inside the zone
+    function convertAll(points, epsg, order) {
+      const bounds = ZONE_BOUNDS[epsg];
+      let inside = 0;
+      const lls = points.map(p => {
+        const easting  = order === "PENZ" ? p.a : p.b;
+        const northing = order === "PENZ" ? p.b : p.a;
+        const ll = toLatLon(epsg, easting, northing);
+        if (isFinite(ll.lat) && isFinite(ll.lon) && inBounds(ll, bounds)) inside++;
+        return ll;
+      });
+      return { lls, inside };
+    }
+
+    /* =========================================================
+       USGS elevation lookup with retry-until-done
+       ========================================================= */
+    const NO_DATA_MAX_TRIES = 5; // USGS answered but had no elevation (e.g., point outside coverage)
+
+    async function fetchElevationOnce(pt, timeoutMs) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const url = `https://epqs.nationalmap.gov/v1/json?x=${pt.lon}&y=${pt.lat}&wkid=4326&units=Feet&output=json`;
+        const res = await fetch(url, { signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const v = parseFloat(data && data.value);
+        if (isNaN(v)) throw new Error("Empty response");
+        if (v <= -9000) return { noData: true };   // USGS "no data" flag (e.g. -1000000)
+        return { value: v };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function fetchUSGSElevations(latLons) {
+      const total = latLons.length;
+      const elevations = new Array(total).fill(null);
+      const noDataTries = new Array(total).fill(0);
+      const gaveUp = new Set();
+
+      let pending = latLons.map((_, i) => i);
+      let pass = 0;
+
+      const doneCount = () => elevations.filter(v => v !== null).length + gaveUp.size;
+
+      while (pending.length > 0) {
+        if (cancelRequested) throw new Error("Cancelled by user.");
+        pass++;
+
+        // First pass is fast; retry passes are gentler with longer timeouts
+        const concurrency = pass === 1 ? 10 : 4;
+        const timeoutMs = Math.min(10000 + (pass - 1) * 5000, 30000);
+        const failed = [];
+
+        for (let i = 0; i < pending.length; i += concurrency) {
+          if (cancelRequested) throw new Error("Cancelled by user.");
+          const chunk = pending.slice(i, i + concurrency);
+
+          await Promise.all(chunk.map(async idx => {
+            try {
+              const r = await fetchElevationOnce(latLons[idx], timeoutMs);
+              if (r.noData) {
+                noDataTries[idx]++;
+                if (noDataTries[idx] >= NO_DATA_MAX_TRIES) gaveUp.add(idx);
+                else failed.push(idx);
+              } else {
+                elevations[idx] = r.value;
+              }
+            } catch (err) {
+              // Timeout or network error: always try again on the next pass
+              console.warn(`USGS fetch failed for location ${idx + 1} (pass ${pass}):`, err.message);
+              failed.push(idx);
+            }
+          }));
+
+          const done = doneCount();
+          setProgress(done / total);
+          setWorking(
+            `Fetching USGS 3DEP elevations: ${done} of ${total} locations`,
+            pass === 1
+              ? "Looking up each point's elevation..."
+              : `Retry pass ${pass - 1}: re-trying ${pending.length} point(s) that timed out.`
+          );
+        }
+
+        pending = failed;
+
+        if (pending.length > 0) {
+          const waitMs = Math.min(2000 * pass, 15000);
+          await cancellableWait(waitMs, secs => {
+            setWorking(
+              `Fetching USGS 3DEP elevations: ${doneCount()} of ${total} locations`,
+              `${pending.length} point(s) timed out. Retrying in ${secs}s... (this is normal, keep the page open)`
+            );
+          });
+        }
+      }
+
+      return { elevations, gaveUp };
+    }
+
+    /* =========================================================
+       Main process
+       ========================================================= */
+    async function processFile() {
+      const processBtn = document.getElementById('processBtn');
+      const epsg = document.getElementById('sourceProjection').value;
+      const zoneName = ZONE_BOUNDS[epsg].name;
+      const inputChoice = document.getElementById('inputFormat').value;
+      const outputChoice = document.getElementById('outputFormat').value;
+
+      if (!selectedFile) {
+        alert("Please select or drag in a Civil 3D point file first.");
+        return;
+      }
+
+      const file = selectedFile;
+      cancelRequested = false;
+      processBtn.disabled = true;
+      setStatus("", "");
+      document.getElementById('preview').style.display = 'none';
+      showWorking(true);
+      setWorking("Step 1: Reading point file...", "Please keep this page open.");
+      await nextFrame();
+
+      try {
+        const text = await file.text();
+        const { points, skipped } = parsePointFile(text);
+        if (points.length === 0) {
+          throw new Error("No valid points found. The file should have lines like: 1,4881880.83,3478633.16,950.00");
+        }
+
+        // Step 2: work out the column order and convert to lat/lon
+        setWorking("Step 2: Locating points...", `${points.length} points`);
+        await nextFrame();
+
+        const asPENZ = convertAll(points, epsg, "PENZ");
+        const asPNEZ = convertAll(points, epsg, "PNEZ");
+        let order, conv, orderNote = "";
+
+        if (inputChoice === "AUTO") {
+          if (asPENZ.inside === 0 && asPNEZ.inside === 0) {
+            throw new Error(
+              `These points are not in ${zoneName} with either column order.\n` +
+              `Check step 2: pick the coordinate system your Civil 3D drawing uses ` +
+              `(Civil 3D: Toolspace > Settings > right-click the drawing > Edit Drawing Settings > Units and Zone).`
+            );
+          }
+          order = asPNEZ.inside > asPENZ.inside ? "PNEZ" : "PENZ";
+          conv = order === "PNEZ" ? asPNEZ : asPENZ;
+          orderNote = `Detected column order: ${order === "PNEZ" ? "PNEZ (Point, Northing, Easting, Elevation)" : "PENZ (Point, Easting, Northing, Elevation)"}.`;
+        } else {
+          order = inputChoice;
+          conv = order === "PNEZ" ? asPNEZ : asPENZ;
+          const other = order === "PNEZ" ? asPENZ : asPNEZ;
+          if (conv.inside === 0) {
+            const tip = other.inside > 0
+              ? `They do fit if the columns are ${order === "PNEZ" ? "PENZ" : "PNEZ"}. Try "Auto-detect" in step 3.`
+              : `Check that step 2 matches your Civil 3D drawing's coordinate system.`;
+            throw new Error(`With ${order} order, these points are not in ${zoneName}.\n${tip}`);
+          }
+        }
+
+        const outsidePts = points.filter((_, i) => !inBounds(conv.lls[i], ZONE_BOUNDS[epsg])).map(p => p.num);
+
+        // Step 3: elevations. Identical coordinates are looked up once.
+        const keyOf = p => `${p.a}|${p.b}`;
+        const uniqueIdx = new Map();
+        const uniqueLLs = [];
+        points.forEach((p, i) => {
+          const k = keyOf(p);
+          if (!uniqueIdx.has(k)) { uniqueIdx.set(k, uniqueLLs.length); uniqueLLs.push(conv.lls[i]); }
+        });
+
+        const { elevations, gaveUp } = await fetchUSGSElevations(uniqueLLs);
+
+        // Step 4: write the file
+        setWorking("Step 3: Writing text file...");
+        setProgress(1);
+        await nextFrame();
+
+        const outOrder = outputChoice === "SAME" ? order : outputChoice;
+        const outputLines = [];
+        const rows = [];
+        const noDataPts = [];
+
+        points.forEach(p => {
+          const u = uniqueIdx.get(keyOf(p));
+          const z = elevations[u];
+          if (z === null) noDataPts.push(p.num);
+          const zText = z !== null ? z.toFixed(2) : "0.00";
+
+          const eText = order === "PENZ" ? p.aText : p.bText;
+          const nText = order === "PENZ" ? p.bText : p.aText;
+          const cols = outOrder === "PENZ"
+            ? [p.num, eText, nText, zText]
+            : [p.num, nText, eText, zText];
+          if (p.desc) cols.push(p.desc);
+          outputLines.push(cols.join(","));
+
+          rows.push(`<tr><td>${escapeHtml(p.num)}</td><td>${escapeHtml(nText)}</td><td>${escapeHtml(eText)}</td>` +
+                    `<td class="old">${escapeHtml(p.oldZ)}</td><td class="new">${zText}</td></tr>`);
+        });
+
+        // Output name = uploaded file name + "NAD83.txt"  (e.g. bob.txt -> bobNAD83.txt)
+        const baseName = file.name.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_');
+        const outName = `${baseName}NAD83.txt`;
+
+        const blob = new Blob([outputLines.join("\r\n") + "\r\n"], { type: "text/plain;charset=utf-8" });
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = downloadUrl;
+        a.download = outName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+
+        showWorking(false);
+
+        // Results table
+        document.getElementById('previewBody').innerHTML = rows.join("");
+        document.getElementById('preview').style.display = 'block';
+
+        // Summary message
+        const first = conv.lls[0];
+        const mapUrl = `https://www.google.com/maps/search/?api=1&query=${first.lat.toFixed(6)},${first.lon.toFixed(6)}`;
+        const lines = [];
+        lines.push(`Downloaded "<b>${escapeHtml(outName)}</b>": ${points.length} point(s), written as ${outOrder}.`);
+        if (orderNote) lines.push(escapeHtml(orderNote));
+        lines.push(`Point ${escapeHtml(points[0].num)} is at ${first.lat.toFixed(6)}, ${first.lon.toFixed(6)}: <a href="${mapUrl}" target="_blank" rel="noopener">check it on Google Maps</a>.`);
+
+        let kind = "success";
+        if (noDataPts.length) {
+          kind = "warning";
+          lines.push(`<br>⚠ USGS has no elevation data for point(s): ${noDataPts.map(escapeHtml).join(", ")}. These were written with elevation 0.00.`);
+        }
+        if (outsidePts.length) {
+          kind = "warning";
+          lines.push(`⚠ Point(s) ${outsidePts.map(escapeHtml).join(", ")} fall outside ${escapeHtml(zoneName)}. Check that they are correct.`);
+        }
+        if (skipped) lines.push(`(${skipped} line(s) that weren't points, such as headers, were skipped.)`);
+
+        setStatus("", kind, lines.join("<br>"));
+
+      } catch (err) {
+        console.error(err);
+        showWorking(false);
+        setStatus(`Error: ${err.message}`, "error");
+      } finally {
+        processBtn.disabled = false;
+        cancelRequested = false;
+      }
+    }
+  </script>
+</body>
+</html>
